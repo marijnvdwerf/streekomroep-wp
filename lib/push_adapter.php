@@ -71,6 +71,11 @@ add_action('init', function () {
  */
 function zw_push_post_guard_rest_change($prepared_post, WP_REST_Request $request)
 {
+    // Autosaves never persist meta to the parent post, and their controller can't handle a WP_Error here.
+    if (is_wp_error($prepared_post) || str_ends_with($request->get_route(), '/autosaves')) {
+        return $prepared_post;
+    }
+
     $meta = $request['meta'];
     if (!is_array($meta) || !array_key_exists('push_post', $meta) || current_user_can('edit_others_posts')) {
         return $prepared_post;
