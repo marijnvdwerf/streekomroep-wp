@@ -44,6 +44,65 @@ add_action('save_post_post', function ($post_id) {
     update_post_meta($post_id, 'push_post', !empty($_POST['push_post']) ? '1' : '0');
 });
 
+/*
+ * Block editor support for the push toggle. The classic submit box above keeps
+ * working as is; it stores '1'/'0' in the same meta key, and its save handler needs
+ * the classic nonce, so the block editor's meta-box-loader request never touches it.
+ */
+add_action('init', function () {
+    register_post_meta('post', 'push_post', [
+        'type' => 'boolean',
+        'single' => true,
+        'default' => false,
+        'show_in_rest' => true,
+        // Same storage format as the classic toggle.
+        'sanitize_callback' => fn ($value) => $value ? '1' : '0',
+        // Editing the post is enough to send the field along unchanged. Changing
+        // the value is restricted in zw_push_post_guard_rest_change().
+        'auth_callback' => fn ($allowed, $meta_key, $post_id) => current_user_can('edit_post', $post_id),
+    ]);
+});
+
+/**
+ * Only users who may use the classic toggle can change push_post over REST.
+ * Checked before the post is saved so a refusal does not leave a half-saved post.
+ * An unchanged or absent value is always accepted, because the block editor
+ * may send the value along with other meta edits.
+ */
+function zw_push_post_guard_rest_change($prepared_post, WP_REST_Request $request)
+{
+    $meta = $request['meta'];
+    if (!is_array($meta) || !array_key_exists('push_post', $meta) || current_user_can('edit_others_posts')) {
+        return $prepared_post;
+    }
+
+    $stored = !empty($prepared_post->ID) && (bool) get_post_meta($prepared_post->ID, 'push_post', true);
+    if (rest_sanitize_boolean($meta['push_post']) === $stored) {
+        return $prepared_post;
+    }
+
+    return new WP_Error(
+        'rest_cannot_edit_push_post',
+        __('Sorry, you are not allowed to change the push notification setting.', 'streekomroep'),
+        ['status' => rest_authorization_required_code()]
+    );
+}
+add_filter('rest_pre_insert_post', 'zw_push_post_guard_rest_change', 10, 2);
+
+add_action('enqueue_block_editor_assets', function () {
+    $screen = get_current_screen();
+    if (!$screen || $screen->base !== 'post' || $screen->post_type !== 'post' || !current_user_can('edit_others_posts')) {
+        return;
+    }
+    wp_enqueue_script(
+        'streekomroep-push-toggle',
+        get_theme_file_uri('static/editor-push-toggle.js'),
+        ['wp-plugins', 'wp-editor', 'wp-core-data', 'wp-components', 'wp-element'],
+        wp_get_theme()->get('Version'),
+        true
+    );
+});
+
 function zw_webapp_send_notification($do_send, $post_id)
 {
     return (bool) get_post_meta($post_id, 'push_post', true);
